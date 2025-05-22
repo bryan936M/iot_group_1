@@ -1,47 +1,131 @@
-import eventlet
+# Import required libraries
+import math
+import joblib  # type: ignore
+import numpy as np  # type: ignore
+
+# Import and configure eventlet for async operations
+import eventlet  # type: ignore
+
 eventlet.monkey_patch()
 
-from flask import Flask, render_template
-from flask_socketio import SocketIO
 import threading
-import math
-
+from flask import Flask, request, jsonify, render_template  # type: ignore
+from flask_socketio import SocketIO  # type: ignore
 
 from db import create_db_connection, view_latest_readings
 
-POLL_INTERVAL = 5
+# Configuration
+POLL_INTERVAL = 5  # Interval in seconds for background data polling
 
+# Load model and define feature names
+feature_names = ["elapsedtime", "velocity", "viscosity_ma", "velocity_std5"]
+model = joblib.load("viscosity_model.joblib")
+
+# Initialize Flask application and SocketIO
 app = Flask(__name__)
 socketio = SocketIO(app)
-app.config['SECRET_KEY'] = 'secret!'
+app.config["SECRET_KEY"] = "secret!"
+
 
 def sanitize(data):
-    """ Replace inf / -inf with None so that JSON encoding won’t fail. """
+    """
+    Clean data by replacing infinite values with zeros to ensure JSON serialization.
+
+    Args:
+        data: List of lists containing numerical data
+
+    Returns:
+        List of lists with infinite values replaced by zeros
+    """
     clean = []
     for row in data:
-        newrow = []
+        new_row = []
         for x in row:
             if isinstance(x, float) and not math.isfinite(x):
-                newrow.append(0)
+                new_row.append(0)
             else:
-                newrow.append(x)
-        clean.append(newrow)
+                new_row.append(x)
+        clean.append(new_row)
     return clean
+
 
 @app.route("/")
 def index():
-    return render_template('index.html')
+    """Serve the main application page."""
+    return render_template("index.html")
+
+
+@app.route("/predict")
+def predict():
+    """
+    Endpoint for making viscosity predictions.
+
+    Expects JSON data with 'elapsedtime' and 'velocity' features.
+    Uses the last 5 readings from the database to calculate additional features.
+
+    Returns:
+        JSON response with prediction or error message
+    """
+    try:
+        json_data = request.get_json()
+
+        # Validate required features are present
+        if not all(f in json_data for f in feature_names[0:2]):
+            return jsonify({"error": "Missing required features"}), 400
+
+        # Get last 5 readings from database
+        last_5_rows = view_latest_readings(create_db_connection, 5)
+        if len(last_5_rows) < 5:
+            return jsonify({"error": "Not enough data to predict"}), 400
+
+        # Process and sanitize data
+        last_5_rows = sanitize(last_5_rows)
+        velocity_list = [float(row[2]) for row in last_5_rows]
+        viscosity_list = [float(row[4]) for row in last_5_rows]
+
+        # Calculate additional features
+        viscosity_ma = np.mean(viscosity_list)  # Moving average of viscosity
+        velocity_std5 = np.std(velocity_list)  # Standard deviation of velocity
+
+        # Prepare input data for prediction
+        input_data = np.array(
+            [[
+                json_data["elapsedtime"],
+                json_data["velocity"],
+                viscosity_ma,
+                velocity_std5,
+            ]]
+        )
+
+        # Make prediction
+        prediction = model.predict(input_data)
+
+        print(prediction)
+
+        return jsonify({"prediction": prediction[0][0]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 def background_thread():
+    """
+    Background thread that periodically polls the database and emits updates via WebSocket.
+    Runs every POLL_INTERVAL seconds.
+    """
     socketio.sleep(1)
     while True:
-      socketio.sleep(POLL_INTERVAL)
-      print("Sending data")
-      data = view_latest_readings(create_db_connection, 3)
-      sanitizedData = sanitize(data)
-      print(sanitizedData)
-      socketio.emit("update_data", {"data": sanitizedData},)
+        socketio.sleep(POLL_INTERVAL)
+        print("Sending data")
+        data = view_latest_readings(create_db_connection, 3)
+        sanitized_data = sanitize(data)
+        print(sanitized_data)
+        socketio.emit(
+            "update_data",
+            {"data": sanitized_data},
+        )
+
 
 if __name__ == "__main__":
-  socketio.start_background_task(target=background_thread)
-  socketio.run(app, debug=True, use_reloader=False)
+    # Start background thread and run the application
+    socketio.start_background_task(target=background_thread)
+    socketio.run(app, debug=True, use_reloader=False)
