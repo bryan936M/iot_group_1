@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Real-Time Data Dashboard</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js (load first) -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js/dist/chart.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <!-- Socket.IO -->
+    <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
+</head>
+
+<body class="bg-gray-100 text-gray-900">
+    <header class="bg-white shadow">
+        <div class="container mx-auto px-4 py-6 flex items-center justify-between">
+            <h1 class="text-2xl font-bold">Real-Time Data Dashboard</h1>
+            <div id="status" class="text-sm text-gray-600">Connecting...</div>
+        </div>
+    </header>
+
+    <main class="container mx-auto px-4 py-6">
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div class="bg-white rounded-lg shadow p-4">
+                <h2 class="text-lg font-medium mb-2 text-center">Elapsed Time</h2>
+                <canvas id="chart1" class="w-full h-48"></canvas>
+            </div>
+            <div class="bg-white rounded-lg shadow p-4">
+                <h2 class="text-lg font-medium mb-2 text-center">Velocity</h2>
+                <canvas id="chart2" class="w-full h-48"></canvas>
+            </div>
+            <div class="bg-white rounded-lg shadow p-4">
+                <h2 class="text-lg font-medium mb-2 text-center">Density</h2>
+                <canvas id="chart3" class="w-full h-48"></canvas>
+            </div>
+            <div class="bg-white rounded-lg shadow p-4">
+                <h2 class="text-lg font-medium mb-2 text-center">Viscosity</h2>
+                <canvas id="chart4" class="w-full h-48"></canvas>
+            </div>
+            <div class="bg-white rounded-lg shadow p-4">
+                <h2 class="text-lg font-medium mb-2 text-center">TDS</h2>
+                <canvas id="chart5" class="w-full h-48"></canvas>
+            </div>
+            <div class="bg-white rounded-lg shadow p-4">
+                <h2 class="text-lg font-medium mb-2 text-center">Mass</h2>
+                <canvas id="chart6" class="w-full h-48"></canvas>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // Connect via WebSocket transport
+        const socket = io(window.location.origin, { transports: ['websocket'] });
+        const statusEl = document.getElementById('status');
+
+        socket.on('connect', () => {
+            statusEl.textContent = 'Connected';
+            statusEl.classList.remove('text-red-500');
+            statusEl.classList.add('text-green-600');
+        });
+        socket.on('disconnect', () => {
+            statusEl.textContent = 'Disconnected';
+            statusEl.classList.remove('text-green-600');
+            statusEl.classList.add('text-red-500');
+        });
+
+        // Chart.js setup with modern config
+        function createChart(id, label, color) {
+            const ctx = document.getElementById(id).getContext('2d');
+            return new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{ label, data: [], borderColor: color, tension: 0.4, fill: false }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { type: 'time', time: { tooltipFormat: 'HH:mm:ss', displayFormats: { second: 'HH:mm:ss' } } },
+                        y: { beginAtZero: true }
+                    }
+                }
+            });
+        }
+
+        const charts = [
+            createChart('chart1', 'Elapsed Time', '#EF4444'),
+            createChart('chart2', 'Velocity', '#3B82F6'),
+            createChart('chart3', 'Density', '#10B981'),
+            createChart('chart4', 'Viscosity', '#F59E0B'),
+            createChart('chart5', 'TDS', '#8B5CF6'),
+            createChart('chart6', 'Mass', '#6366F1'),
+        ];
+
+        socket.on('update_data', ({ data }) => {
+            const rows = data.slice().reverse();
+            charts.forEach(c => {
+                c.data.labels = [];
+                c.data.datasets[0].data = [];
+            });
+
+            rows.forEach(row => {
+                const t = row[7];
+                charts.forEach((c, i) => {
+                    c.data.labels.push(t);
+                    c.data.datasets[0].data.push(row[i + 1]);
+                });
+            });
+
+            charts.forEach(c => c.update());
+        });
+    </script>
+</body>
+
+</html>
