@@ -11,6 +11,7 @@ eventlet.monkey_patch()
 import threading
 from flask import Flask, request, jsonify, render_template  # type: ignore
 from flask_socketio import SocketIO  # type: ignore
+from flask_cors import CORS  # type: ignore
 
 from db import create_db_connection, view_latest_readings
 
@@ -23,7 +24,8 @@ model = joblib.load("viscosity_model.joblib")
 
 # Initialize Flask application and SocketIO
 app = Flask(__name__)
-socketio = SocketIO(app)
+CORS(app, resources={r"/*": {"origins": "http://localhost:5173"}})
+socketio = SocketIO(app, cors_allowed_origins="http://localhost:5173")
 app.config["SECRET_KEY"] = "secret!"
 
 
@@ -52,7 +54,8 @@ def sanitize(data):
 @app.route("/")
 def index():
     """Serve the main application page."""
-    return render_template("index.html")
+    # return render_template("index.html")
+    return jsonify({"message": "Hello, World!"})
 
 
 @app.route("/predict")
@@ -89,12 +92,14 @@ def predict():
 
         # Prepare input data for prediction
         input_data = np.array(
-            [[
-                json_data["elapsedtime"],
-                json_data["velocity"],
-                viscosity_ma,
-                velocity_std5,
-            ]]
+            [
+                [
+                    json_data["elapsedtime"],
+                    json_data["velocity"],
+                    viscosity_ma,
+                    velocity_std5,
+                ]
+            ]
         )
 
         # Make prediction
