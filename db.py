@@ -62,3 +62,13 @@ def view_latest_readings(get_connection: Callable[[str], tuple[sqlite3.Cursor, s
     conn.close()
     
     return records
+
+def view_latest_readings_before_id(get_connection: Callable[[str], tuple[sqlite3.Cursor, sqlite3.Connection]], id: int, limit: int = 5) -> list:
+    """
+    Open a connection, fetch the 5 readings before the given id from the readings table, and close the connection.
+    """
+    cursor, conn = get_connection(DB_NAME)
+    cursor.execute('SELECT * FROM readings WHERE id < ? ORDER BY id DESC LIMIT ?', (id, limit))
+    records = cursor.fetchall()
+    conn.close()
+    return records

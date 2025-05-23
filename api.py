@@ -13,7 +13,11 @@ from flask import Flask, request, jsonify, render_template  # type: ignore
 from flask_socketio import SocketIO  # type: ignore
 from flask_cors import CORS  # type: ignore
 
-from db import create_db_connection, view_latest_readings
+from db import (
+    create_db_connection,
+    view_latest_readings,
+    view_latest_readings_before_id,
+)
 
 # Configuration
 POLL_INTERVAL = 5  # Interval in seconds for background data polling
@@ -51,6 +55,33 @@ def sanitize(data):
     return clean
 
 
+def get_last_5_readings_sanitized():
+    """
+    Get the last 5 readings from the database and sanitize them.
+    """
+    return sanitize(view_latest_readings(create_db_connection, 5))
+
+
+def get_prediction(elapsedtime, velocity, last_5_readings_sanitized):
+    """
+    Get a prediction for the viscosity.
+    """
+    # Calculate additional features
+    velocity_list = [float(row[2]) for row in last_5_readings_sanitized]
+    viscosity_list = [float(row[4]) for row in last_5_readings_sanitized]
+
+    viscosity_ma = np.mean(viscosity_list)  # Moving average of viscosity
+    velocity_std5 = np.std(velocity_list)  # Standard deviation of velocity
+
+    # Prepare input data for prediction
+    input_data = np.array([[elapsedtime, velocity, viscosity_ma, velocity_std5]])
+
+    # Make prediction
+    prediction = model.predict(input_data)
+
+    return float(prediction[0][0])
+
+
 @app.route("/")
 def index():
     """Serve the main application page."""
@@ -58,7 +89,7 @@ def index():
     return jsonify({"message": "Hello, World!"})
 
 
-@app.route("/predict")
+@app.route("/predict", methods=["POST"])
 def predict():
     """
     Endpoint for making viscosity predictions.
@@ -81,33 +112,14 @@ def predict():
         if len(last_5_rows) < 5:
             return jsonify({"error": "Not enough data to predict"}), 400
 
-        # Process and sanitize data
-        last_5_rows = sanitize(last_5_rows)
-        velocity_list = [float(row[2]) for row in last_5_rows]
-        viscosity_list = [float(row[4]) for row in last_5_rows]
-
-        # Calculate additional features
-        viscosity_ma = np.mean(viscosity_list)  # Moving average of viscosity
-        velocity_std5 = np.std(velocity_list)  # Standard deviation of velocity
-
-        # Prepare input data for prediction
-        input_data = np.array(
-            [
-                [
-                    json_data["elapsedtime"],
-                    json_data["velocity"],
-                    viscosity_ma,
-                    velocity_std5,
-                ]
-            ]
+        new_prediction = get_prediction(
+            json_data["elapsedtime"],
+            json_data["velocity"],
+            get_last_5_readings_sanitized(),
         )
+        print(new_prediction)
 
-        # Make prediction
-        prediction = model.predict(input_data)
-
-        print(prediction)
-
-        return jsonify({"prediction": prediction[0][0]})
+        return jsonify({"prediction": new_prediction})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -120,13 +132,32 @@ def background_thread():
     socketio.sleep(1)
     while True:
         socketio.sleep(POLL_INTERVAL)
-        print("Sending data")
-        data = view_latest_readings(create_db_connection, 3)
+        data = view_latest_readings(create_db_connection, 5)
         sanitized_data = sanitize(data)
-        print(sanitized_data)
+        print("Sensor data:", sanitized_data)
+
+        predictions = []
+        for row in data:
+            sanitized_row = sanitize([row])[0]
+            last_5_rows_before_row = sanitize(
+                view_latest_readings_before_id(create_db_connection, row[0], 5)
+            )
+            
+            if len(last_5_rows_before_row) < 5:
+                predictions.append(0)
+                continue
+            
+            predictions.append(
+                get_prediction(
+                    sanitized_row[1], sanitized_row[2], last_5_rows_before_row
+                )
+            )
+
+        print("Predictions:", predictions)
+
         socketio.emit(
             "update_data",
-            {"data": sanitized_data},
+            {"data": sanitized_data, "predictions": predictions},
         )
 
 
